@@ -1,0 +1,1158 @@
+---
+title: "Aggregated Code and Analyses for Heterogeneity Paper"
+author: Niall Bolger, Katherine S. Zee, Maya Rossignac-Milon, & Ran R. Hassin
+output:
+  html_document: default
+  html_notebook: default
+---
+
+# Valence RT Dataset
+
+## Loading Data and Packages
+```{r Loading Data and Packages}
+
+library(lme4)
+library(ggplot2)
+library(ggthemes)
+library(lmerTest)
+theme_set(theme_bw(base_size = 14))
+library(car)
+library(broom)
+#For dotplots
+library(Rcmdr)
+library(car)
+library(gridExtra)
+library(ellipse)
+library(dplyr)
+
+
+
+
+#setwd("~/heterogeneityproject")
+rndt <- read.csv("heterogeneity_dataset1_traitvalence.csv")
+
+```
+
+
+
+## Valence RT: Data Subsetting and Analyses
+```{r}
+rndt_sr <- subset(rndt, response.keys == "up") # subset to only select traits endorsed as self-relevant
+
+
+
+rndt_sr$rt.z <- scale(rndt_sr$rt) #Create z-scores for RT
+length((unique(rndt_sr$id))) # 62
+rndt_srz <- subset(rndt_sr,  rt.z < 3) #within +3 SD of the mean RT
+rndtz <- rndt_srz[!(rndt_srz$id %in% c(250, 257, 272)), ] # New dataset without the three participants who did not select any negative words
+rndtz <- within(rndtz, {
+  idcat <- as.factor(id)
+})
+
+length((unique(rndtz$id))) # 59 in final sample
+
+
+#write.csv(rndtz, "heterogeneity_dataset1_traitvalence_spss.csv", row.names = F) #Version to read into SPSS
+
+# lmer logrt - f(valence) with random intercepts only
+valrt_intonly <- lmer(logrt ~ valenceE + (1 | id),  data=rndtz)
+summary(valrt_intonly)
+
+# with Random Slopes
+# Used in Paper
+valrt_intslope <- lmer(logrt ~ valenceE + (1 + valenceE| id),  data=rndtz)
+summary(valrt_intslope)
+
+
+### Model Comparison
+anova(valrt_intonly, valrt_intslope) #Compares heterogeneity with no-heterogeneity model using LR Chi-square test
+
+#confint(valrt_intslope) #Uses a lot of computer resources; note that CIs are for SDs of random effects, not variances
+
+# Computing profile confidence intervals ...
+#                   2.5 %     97.5 %
+# .sig01       0.13383762  0.2013776
+# .sig02      -0.44436025  0.2838273
+# .sig03       0.08116775  0.1701985
+# .sigma       0.23291960  0.2524141
+# (Intercept)  6.82127497  6.9110582
+# valenceE    -0.20595293 -0.1180547
+
+#Calculate population intervals for random intercept (level of logRT):
+round(6.86632  +  1.96*0.1646, digits = 2)
+round(6.86632  -  1.96*0.1646, digits = 2)
+
+#Calculate population intervals for random valence slope (heterogeneity)
+round(-0.16157 + 1.96*0.1250, digits = 2)
+round(-0.16157 - 1.96*0.1250, digits = 2)
+
+
+# with rt not logrt
+valrt_intslope_ms <- lmer(rtms ~ valenceE + (1 + valenceE| id),  data=rndtz)
+# mle3aaa 
+summary(valrt_intslope_ms)
+
+
+
+###### with ggplot ######
+mean <- -.16
+sd <- .13 # pop value
+ub <- 0
+lb <- -1
+
+x <- seq(-4,4,length=100)*sd + mean
+dendf <- data.frame(
+x =  seq(-4,4,length=100)*sd + mean,
+hx = dnorm(x,mean,sd), 
+ub = 0, lb = -1)
+
+area <- pnorm(ub, mean, sd) - pnorm(lb, mean, sd)
+denstitle <-  paste("Proportion of population with faster RTs to positive words =",
+                signif(area, digits=2))
+
+dendf$i <- dendf$x >= dendf$lb & dendf$x <= dendf$ub
+x1 <- c(dendf$lb,dendf$x[dendf$i],dendf$ub)
+x2 <- c(0,dendf$hx[dendf$i],0)
+
+densplot <- ggplot(dendf, aes(x=x)) +
+  geom_path(data = dendf, aes(x=x, y=hx), alpha = 1, color = "firebrick3", size = 1) 
+
+densplot_dat <- ggplot_build(densplot)$data[[1]]
+
+densplot2 <- densplot + geom_area(data = subset(densplot_dat, x < 0), aes(x=x, y=y), fill="red", alpha = .4, color = 'red') +
+  theme_few() + xlab("Trait Valence Effect (logRT units)") + ylab("") + 
+   geom_path(data = dendf, aes(x=x, y=hx), alpha = 1, color = "red", size = 1) +
+  ggtitle(denstitle ) +
+    theme(text = element_text(size=12))  + 
+    theme(plot.title = element_text(hjust = 0.5)) +
+  theme(
+  axis.text.y = element_blank(),
+  axis.ticks = element_blank())
+densplot2
+#ggsave(densplot2, file = "Fig4_densplot2.pdf", height = 3.5, width = 7)
+
+
+
+
+
+```
+
+
+## Valence RT Analysis accounting for words endorsed
+```{r}
+# with Number of positive words endorsed:
+
+sum.na <- function (x) {
+  out <- sum(x, na.rm=T)
+  out
+}
+
+rndtz$posval <- ifelse(rndtz$valenceE == .5, 1, 0)
+rndtz<- within(rndtz, {numpos = ave(posval, id, FUN = sum.na)})
+rndtz$negval <- ifelse(rndtz$valenceE == -.5, 1, 0)
+rndtz <- within(rndtz, {numneg = ave(negval, id, FUN = sum.na)})
+rndtz$valenceratio <- rndtz$numpos/(rndtz$numpos + rndtz$numneg)
+rndtz$valenceratio.c <- rndtz$valenceratio - mean(rndtz$valenceratio) ## centering ratio on mean, which is 62% of words endorsed as positive
+
+valrt_intslope_numpos <- lmer(logrt ~ valenceE*valenceratio.c + (1 + valenceE| id),  data=rndtz)
+summary(valrt_intslope_numpos)
+# even when accounting for proportion of words chosen that were positive vs. negative, we still see heterogeneity
+ranef.valrt.numpos <- fixef(valrt_intslope_numpos)[2]  + ranef(valrt_intslope_numpos)$id[,2] #ValencE
+
+
+```
+
+## Valence RT Dotplot 
+```{r Dotplot}
+
+ranef.valrt <- fixef(valrt_intslope)[2]  + ranef(valrt_intslope)$id[,2] #ValencE
+
+ranef.valrt.quant <- quantile(ranef.valrt, probs=c(.025, .975))
+
+
+valrt_intslope_tidy <- tidy(summary(valrt_intslope)$varcor)
+ranef.valrt.pop <- c(fixef(valrt_intslope)[2] + -1.96*subset(valrt_intslope_tidy, var1 == "valenceE")$sdcor, fixef(valrt_intslope)[2] + 1.96*subset(valrt_intslope_tidy, var1 == "valenceE")$sdcor)
+
+
+ranef.valrtdf <- as.data.frame(ranef.valrt)
+ranef.valrtdf$x <- "x"
+valrt_stripplot <- ggplot(ranef.valrtdf, aes(x=x, y=ranef.valrt)) + 
+  theme(legend.position="none") +
+  xlab(" ") + ylab("Trait Valence Effect (logRT units)") + 
+  ylim(-.45, .1) +
+  geom_hline(yintercept = ranef.valrt.quant[1], size = 1.5, color = "dodgerblue2", linetype="dashed") +
+  geom_hline(yintercept = ranef.valrt.quant[2], size = 1.5, color = "dodgerblue2", linetype="dashed") +
+  geom_hline(yintercept = summary(valrt_intslope)$coeff["valenceE", "Estimate"], size = 1.5, color = "black", linetype="solid") +
+  geom_hline(yintercept = ranef.valrt.pop[1], size = 1.5, color = "red", linetype="solid") +
+  geom_hline(yintercept = ranef.valrt.pop[2], size = 1.5, color = "red", linetype="solid") +
+    geom_jitter(width = 0.01, height = 0, size = 4,
+              shape = 21, colour = "navyblue", fill = "dodgerblue2", alpha = .95, stroke = 1) +
+  theme_few() +
+  theme(text = element_text(size=12))  + 
+  theme(axis.ticks.x = element_blank(), axis.text.y = element_blank()) + coord_flip() 
+valrt_stripplot
+#ggsave(valrt_stripplot, file = "valrt_stripplot.pdf", height = 2, width = 8)
+
+```
+
+
+## Valence RT Panel Plots
+```{r}
+
+#Put the EBLUPs of the random effects into a separate dataset
+cfs1 <- ranef(valrt_intslope)
+cfs2 <- as.data.frame(cbind(cfs1$id[,1], cfs1$id[,2]))
+cfs2$id <- rbind(201,202,204,205,206,207,208,209,210,212,219,220,221,222,223,224,226,228,229,232,
+           234,235,236,237,238,239,240,241,242,243,244,245,246,247,248,249,251,252,254,255,
+           256,262,263,264,265,266,267,268,269,270,271,273,274,301,302,303,304,305,306) #Add in id numbers
+
+names(cfs2) <- make.names(names(cfs2))
+names(cfs2)[c(2,1)] <- c("ebslope","ebintercept") 
+
+
+# adding in fixed effects
+cfs2$intercept<- summary(valrt_intslope)$coeff["(Intercept)", "Estimate"] + cfs2$ebintercept
+cfs2$slope<- summary(valrt_intslope)$coeff["valenceE", "Estimate"] + cfs2$ebslope
+
+#Merge upper-level variables with the process data frame
+rndtz_merged <-merge(rndtz, cfs2, all=TRUE, by="id")
+
+#Create predicted values based on within-subject causal model
+rndtz_merged$pred<-rndtz_merged$intercept + rndtz_merged$slope*rndtz_merged$valenceE
+
+#To create graphs based on observed data only: Sort the dataset by slope, ID, and valence
+ordrndtz_merged<-rndtz_merged[order(rndtz_merged$slope, rndtz_merged$id, rndtz_merged$valenceE),]
+
+#Sort the upper-level data frame by slope and ID
+ordcfs2<-cfs2[order(cfs2$slope, cfs2$id),]
+
+
+
+
+
+ordrndtz_merged_sub <- subset(ordrndtz_merged, id == 208 | id == 222 | id == 241 |
+                                id == 207 | id == 247)
+ordrndtz_merged_sub <- dplyr::select(ordrndtz_merged_sub, id, valenceE, logrt, slope, intercept)
+ordrndtz_merged_sub <- mutate(ordrndtz_merged_sub,
+                     id = reorder(id, slope))
+
+ordrndtz_merged_sub2 <- dplyr::select(ordrndtz_merged_sub, id, slope)
+
+newavg <- data.frame(valenceE = c(-5., .5))
+newavg$predlogrt <- predict(valrt_intslope, re.form = NA, newavg)
+newvary <- expand.grid(valenceE = c(-.5, .5), id = c(208, 222, 241, 207, 247))
+newvary$logrt <- predict(valrt_intslope, newvary)
+newvary <- merge(newvary, ordrndtz_merged_sub2, by = "id")
+newvary <- mutate(newvary, id = reorder(id, slope))
+newvary$sloperound <- round(newvary$slope, digits = 2)
+
+
+ordrndtz_merged_sub$valenceEfac <- ifelse(ordrndtz_merged_sub$valenceE == .5, "Pos", "Neg")
+
+to_string <- as_labeller(c(`208` = paste(unique(subset(newvary, id == 208)$sloperound)), 
+                           `207` = paste(unique(subset(newvary, id == 207)$sloperound)),
+                           `222` = paste(unique(subset(newvary, id == 222)$sloperound)),
+                           `241` = paste(unique(subset(newvary, id == 241)$sloperound)),
+                           `247` = paste(unique(subset(newvary, id == 247)$sloperound))))
+
+
+valrt_panelplot_all <- ggplot(ordrndtz_merged_sub, aes(valenceE, logrt)) +
+  geom_jitter(height = 0, width = .03, size = 1.5,
+              shape = 21, colour = "navyblue", fill = "dodgerblue2", alpha = .95, stroke = .5) +
+   theme_few()  + geom_line(data = newvary, col = "black", size = 1.3) + ylab("Reaction Time (log ms)\n") + 
+  xlab("\nTrait Valence") + scale_x_continuous(breaks=seq(-.5, .5, 1), 
+                                             labels = paste0(c("Neg", "Pos"))) + 
+  theme(text = element_text(size=12)) 
+
+valrt_panelplot_ids <- valrt_panelplot_all + facet_wrap(~id, labeller = to_string, nrow = 1) +
+  theme(panel.spacing = unit(2, "lines"))
+valrt_panelplot_ids
+#ggsave(valrt_panelplot_ids, file = "Fig2_valrt_panelplotbyranef_subIDs_180708.pdf", height = 4, width = 8)
+
+
+```
+
+
+## Valence RT: Raw differences vs. Model predictions
+```{r}
+rndtznum <- dplyr::select(rndtz, id, numneg)
+#rndtznum[order(rndtznum$numneg),]
+# need to omit 306 bc this participant only chose 1 neg trait
+
+
+ids <- unique(subset(rndtz, id != 306)$id)
+diff <- data.frame(sub = ids, diff = NA, lower = NA, upper = NA)
+rndtz$valenceEfac <- ifelse(rndtz$valenceE == -.5, "n", "p")
+for(i in ids){
+  data_i <- subset(rndtz, rndtz$id == i)
+  rts <- split(data_i, data_i$valenceEfac)
+  t <- t.test(rts$n[, "logrt"], rts$p[, "logrt"])
+  diff[i, 2:4] <- c((t$estimat[2]-t$estimat[1]), t$conf.int[2:1])
+}
+diff_i <- diff[order(diff$diff),]
+diff_i$id <- as.numeric(row.names(diff_i))
+diff_i$lower <- -1*diff_i$lower
+diff_i$upper <- -1*diff_i$upper
+diff_i <- subset(diff_i, is.na(diff)==F)
+
+## Merge raw estimates with model estimates of valence effect
+
+valranefs <- dplyr::select(cfs2, id, slope)
+valestimates <- merge(diff_i, valranefs, by = 'id')
+valestimates2 <- valestimates[order(valestimates$diff),]
+head(valestimates2)
+valestimates2$idorder <- 1:58
+
+
+
+###### New figure #####
+valestimates_rawdiff <- dplyr::select(valestimates2, id, diff) 
+colnames(valestimates_rawdiff) <- c('id', 'diff_rt') 
+valestimates_rawdiff$type <- "Observed Effects"
+
+valestimates_preddiff <- dplyr::select(valestimates2, id, slope) 
+colnames(valestimates_preddiff) <- c('id', 'diff_rt') 
+valestimates_preddiff$type <- "Model Predictions"
+
+valestimates3 <- rbind(valestimates_rawdiff, valestimates_preddiff)
+
+
+plotvalest2 <- ggplot(valestimates3, aes(type, diff_rt)) +
+  geom_hline(yintercept = summary(valrt_intslope)$coeff["valenceE", "Estimate"] , size = 1, color = "black") +    
+  geom_hline(yintercept = 0, size = .5, color = "gray50", linetype = "solid") +
+    geom_hline(yintercept = fixef(valrt_intslope)[2] + -1.96*subset(valrt_intslope_tidy, var1 == "valenceE")$sdcor, size = 1, color = "red") +
+      geom_hline(yintercept = fixef(valrt_intslope)[2] + 1.96*subset(valrt_intslope_tidy, var1 == "valenceE")$sdcor, size = 1, color = "red") + 
+  geom_line(aes(group = id), color = "dodgerblue2", size = .7, alpha = .5) + 
+    geom_jitter(width = .02, height = 0, size = 4,
+              shape = 21, colour = "navyblue", fill = "dodgerblue2", alpha = .95, stroke = 1)+
+  xlab(" ") + ylab("Valence Effect") + 
+  theme_few()+
+  theme(axis.text.x=element_text(size=12))+
+  theme(axis.text.y=element_text(size=12))+
+  theme(axis.title.y=element_text(size=12))+
+  coord_flip()
+plotvalest2
+#ggsave(plotvalest2, file = "Fig3_plotvalest2.pdf", height = 4, width = 8)
+
+
+```
+
+
+
+
+
+## Valence RT: Aggregation Approach for RM ANOVA
+```{r}
+
+#Read aggregated dataset
+rndtz.ag <- read.csv("heterogeneity_dataset1_traitvalence_ANOVA.csv")
+#Make an id factor
+rndtz.ag <- within(rndtz.ag, {
+  idcat <- as.factor(id)
+})
+
+#Set up effect coded contrasts
+contrasts(rndtz.ag$idcat) <- contr.sum 
+levels(rndtz.ag$idcat)
+
+#Repeated measures ANOVA using aov function
+valrt.rmanova <- aov(logrt ~ valenceE + idcat, data=rndtz.ag)
+summary(valrt.rmanova)
+coef(valrt.rmanova)
+confint(valrt.rmanova)
+
+```
+
+
+## Valence RT: Random Stimuli Example
+```{r}
+valrt_intslopestim <- lmer(logrt ~ valenceE + (1 + valenceE| id) + (1 | word),  data=rndtz)
+summary(valrt_intslopestim)
+
+```
+
+
+## Valence RT: Analysis without subsetting self-relevant traits
+```{r}
+
+length((unique(rndt$id))) # 66, but 62 in analysis
+# 4 participants (203, 211, 213, 253) contributed promotion focus scores but did not complete any experimental trials
+
+
+
+rndt$rt.z <- scale(rndt$rt)
+rndt2 <- subset(rndt, rt.z < 5)
+length((unique(rndt2$id)))
+
+
+# Analysis with all words included:
+valrtfull_intslope <- lmer(logrt ~ valenceE + (1 + valenceE| id),  data=rndt2)
+summary(valrtfull_intslope)
+
+
+
+# Analysis with all words included and with moderation by endorsement:
+rndt2$endorseE <- ifelse(rndt2$response.keys == "up", .5, -.5)
+
+valrtfull_intslope_endorse <- lmer(logrt ~ valenceE*endorseE + (1 + valenceE * endorseE| id),  data=rndt2)
+summary(valrtfull_intslope_endorse)
+
+
+
+```
+
+
+
+## Valence RT: Bayesian Example
+```{r}
+
+library(brms)
+valrt_bayesian <- brm(logrt ~ valenceE + (1 + valenceE | id),  data=rndtz,
+                      cores = 4, chains = 2) 
+# using default (uninformative) prior
+# note: this model may take a few minutes to run 
+# settings for chains and cores can be adjusted to help with run time
+summary(valrt_bayesian)
+
+```
+
+# Face Orientation Dataset
+```{r Analyses for Upright v. Upside-Down only}
+
+##### ***Dataset available from the authors upon request *** #####
+ranfacefo1 <- read.csv("heterogeneity_dataset2_faceorient.csv") 
+length(unique(ranfacefo1$id))
+table(ranfacefo1$id)
+
+
+# fo = face orientation variable (-.5 = upside down, .5 = upright)
+
+ranfacem1 <- lmer(logrt ~ fo + (fo | id), data = ranfacefo1)
+summary(ranfacem1)
+# confint(ranfacem1)
+#                  2.5 %     97.5 %
+# .sig01       0.20950893  0.3906011
+# .sig02      -1.00000000 -0.4540153
+# .sig03       0.06050036  0.1644574
+# .sigma       0.41629756  0.4400204
+# (Intercept)  4.98432854  5.2356294
+# fo          -0.25984990 -0.1434228
+
+
+
+#Calculate Population Heterogeneity for Intercept
+round(5.11 + 1.96*0.28, digits = 2)
+round(5.11 - 1.96*0.28, digits = 2)
+
+#Calculate Population Heterogeneity for Face Orientation
+round(-0.20 + 1.96*0.11, digits = 2)
+round(-0.20 - 1.96*0.11, digits = 2)
+
+#Run Model with Random Intercept Only
+#in order to carry out test of random slope
+
+ranfacem1_intonly <- lmer(logrt ~ fo + (1 | id), data = ranfacefo1)
+summary(ranfacem1_intonly)
+
+### Model Comparison
+anova(ranfacem1, ranfacem1_intonly)
+
+```
+
+## Face Orientation Plots
+```{r}
+
+
+#Order by Ranef Size
+
+ranfacem1.ranef<-ranef(ranfacem1)$id #Get Ranefs for f01
+ranfacem1.ranef$id <- as.numeric(row.names(ranfacem1.ranef)) #Add ID Column
+
+ranfacem1.ranef$fosum <- ranfacem1.ranef$fo + fixef(ranfacem1)[2]
+
+ordranfacem1.ranef <- ranfacem1.ranef[order(ranfacem1.ranef$fosum), ]
+
+#Add Predicted Values to ranface
+ranfacefo1$pred <- fitted(ranfacem1)
+
+#Order ranface by Participant, Face-orientation, predicted value
+ordranfacefo1 <- ranfacefo1[order(ranfacefo1$id, 
+                            ranfacefo1$fo, ranfacefo1$pred), ]
+
+#Calculate quantiles for dotplot
+ranfacem1.quant <- as.vector(quantile(ranfacem1.ranef$fosum, probs=c(.025, .975)))
+
+ranfacem1_tidy <- tidy(summary(ranfacem1)$varcor)
+ranef.face.pop <- c(fixef(ranfacem1)[2] + -1.96*subset(ranfacem1_tidy, var1 == "fo")$sdcor, fixef(ranfacem1)[2] + 1.96*subset(ranfacem1_tidy, var1 == "fo")$sdcor)
+
+
+
+## ggplot dotplot
+ranfacem1.ranef$x <- "x"
+fo_stripplot <- ggplot(ranfacem1.ranef, aes(x=x, y=fosum)) + 
+  theme(legend.position="none") +
+  xlab(" ") + ylab("Face Orientation Effect (logRT units)") + 
+  ylim(-.45, .1) +
+  geom_hline(yintercept = ranfacem1.quant[1], size = 1.5, color = "dodgerblue2", linetype="dashed") +
+  geom_hline(yintercept = ranfacem1.quant[2], size = 1.5, color = "dodgerblue2", linetype="dashed") +
+  geom_hline(yintercept = summary(ranfacem1)$coeff["fo", "Estimate"], size = 1.5, color = "black", linetype="solid") +
+  geom_hline(yintercept = ranef.face.pop[1], size = 1.5, color = "red", linetype="solid") +
+  geom_hline(yintercept = ranef.face.pop[2], size = 1.5, color = "red", linetype="solid") +
+    geom_jitter(width = 0.0, height = 0, size = 4,
+              shape = 21, colour = "navyblue", fill = "dodgerblue2", alpha = .95, stroke = 1) +
+  theme_few() +
+  theme(text = element_text(size=12))  + 
+  theme(axis.ticks.x = element_blank(), axis.text.y = element_blank()) + coord_flip() 
+fo_stripplot
+#ggsave(fo_stripplot, file = "Fig5_fo_stripplot.pdf", height = 2, width = 8)
+
+
+
+
+foranef <- merge(ordranfacefo1, ordranfacem1.ranef, by = "id")
+foranef$slope <- foranef$fosum
+foranef$fo <- foranef$fo.x
+
+foranef_sub <- subset(foranef, id == 4 | id == 11 | id == 23 |
+                                id == 14 | id == 21)
+foranef_sub <- dplyr::select(foranef_sub, id, fo, logrt, slope)
+foranef_sub <- mutate(foranef_sub,
+                              id = reorder(id, slope))
+
+foranef_sub2 <- dplyr::select(foranef_sub, id, slope)
+
+fo_newavg <- data.frame(fo = c(-5., .5))
+fo_newavg$predlogrt <- predict(ranfacem1, re.form = NA, fo_newavg)
+fo_newvary <- expand.grid(fo = c(-.5, .5), id = c(4, 11, 23, 14, 21))
+fo_newvary$logrt <- predict(ranfacem1, fo_newvary)
+fo_newvary <- merge(fo_newvary, foranef_sub2, by = "id")
+fo_newvary <- mutate(fo_newvary, id = reorder(id, slope))
+fo_newvary$sloperound <- round(fo_newvary$slope, digits = 2)
+
+
+fo_to_string <- as_labeller(c(`4` = paste(unique(subset(fo_newvary, id == 4)$sloperound)), 
+                           `11` = paste(unique(subset(fo_newvary, id == 11)$sloperound)),
+                           `23` = paste(unique(subset(fo_newvary, id == 23)$sloperound)),
+                           `14` = paste(unique(subset(fo_newvary, id == 14)$sloperound)),
+                           `21` = paste(unique(subset(fo_newvary, id == 21)$sloperound))))
+
+
+fo_panelplot_all <- ggplot(foranef_sub, aes(fo, logrt)) +
+  geom_jitter(height = 0, width = .03, size = 1.5,
+              shape = 21, colour = "navyblue", fill = "dodgerblue2", alpha = .95, stroke = .5) +
+  theme_few()  + geom_line(data = fo_newvary, col = "black", size = 1.3) + ylab("Reaction Time (log ms)\n") + 
+  xlab("\nFace Orientation") + scale_x_continuous(breaks=seq(-.5, .5, 1), 
+                                               labels = paste0(c("Upside\nDown", "Upright"))) + 
+  theme(text = element_text(size=12)) 
+
+fo_panelplot_ids <- fo_panelplot_all + facet_wrap(~id, labeller = fo_to_string, nrow = 1) +
+  theme(panel.spacing = unit(2, "lines"))
+fo_panelplot_ids
+# ggsave(fo_panelplot_ids, file = "Fig6_ranface_panelplotbyranef_subIDs_180708.pdf", height = 4, width = 8)
+
+
+```
+
+## Face Orientation: Bayesian Example
+```{r, echo = T, results = "hide"}
+
+ranfacem1_bayesian <- brm(logrt ~ fo + (fo | id), data = ranfacefo1,
+                          cores = 4, chains = 2)
+```
+```{r}
+summary(ranfacem1_bayesian)
+# using default (uninformative) prior
+# note: this model may take a few minutes to run 
+# settings for chains and cores can be adjusted to help with run time
+
+```
+
+# Math Priming (Exp 6) Dataset
+```{r}
+
+math <- read.csv("heterogeneity_dataset3_mathprime.csv")
+
+length(unique(math$id))
+
+sort(table(math$id))
+```
+
+## Math Priming Analyses using logRT
+```{r}
+## random intercept only
+mathmod_int <- lmer(logrt ~ congr + (1 | id), data = math)
+summary(mathmod_int)
+#confint(mathmod_int, oldNames = FALSE)
+
+## random slopes
+mathmod_intslope <- lmer(logrt ~ congr +  (congr | id), data = math)
+summary(mathmod_intslope)
+confint(mathmod_intslope, "congr")
+confint(mathmod_intslope, "(Intercept)")
+confint(mathmod_intslope, ".sig01")
+confint(mathmod_intslope, ".sig03")
+# issues with confint command
+
+anova(mathmod_int, mathmod_intslope)
+
+
+#Calculate Population Heterogeneity for Intercept
+round(6.48 + 1.96*.1672669, digits = 2)
+round(6.48 - 1.96*.1672669, digits = 2)
+
+#Calculate Population Heterogeneity for slope
+round(-0.0223 + 1.96*0.0004197, digits = 3)
+round(-0.0223 - 1.96*0.0004197, digits = 3)
+
+
+```
+
+## Math Priming Plots
+```{r}
+#Get Ranefs for congr
+#Add ID Column
+#Order by Ranef Size
+mathmod_intslope.ranef<-ranef(mathmod_intslope)$id
+mathmod_intslope.ranef$id <- as.numeric(row.names(mathmod_intslope.ranef))
+mathmod_intslope.ranef$congr <- mathmod_intslope.ranef$congr + fixef(mathmod_intslope)[2]
+
+ordmathmod_intslope.ranef <- mathmod_intslope.ranef[order(mathmod_intslope.ranef$congr), ]
+
+#Add Predicted Values to math dataset
+math$pred <- predict(mathmod_intslope)
+
+#Order math by Participant, Predicted congruence effect, and predicted logRT
+ordmath <- math[order(math$id, 
+                            math$congr, math$pred), ]
+
+
+# Math Priming Dotplot
+mathmod.quant <- as.vector(quantile(mathmod_intslope.ranef$congr, probs=c(.025, .975)))
+
+
+mathmod_intslope_tidy <- tidy(summary(mathmod_intslope)$varcor)
+ranef.math.pop <- c(fixef(mathmod_intslope)[2] + -1.96*subset(mathmod_intslope_tidy, var1 == "congr")$sdcor, fixef(mathmod_intslope)[2] + 1.96*subset(mathmod_intslope_tidy, var1 == "congr")$sdcor)
+
+
+
+
+mathmod_intslope.ranef$x <- "x"
+math_stripplot <- ggplot(mathmod_intslope.ranef, aes(x=x, y=congr)) + 
+  theme(legend.position="none") +
+  xlab(" ") + ylab("Math Prime Congruence Effect (logRT units)") + 
+  ylim(-.027, 0) +
+  geom_hline(yintercept = mathmod.quant[1], size = 1.5, color = "dodgerblue2", linetype="dashed") +
+  geom_hline(yintercept = mathmod.quant[2], size = 1.5, color = "dodgerblue2", linetype="dashed") +
+  geom_hline(yintercept = summary(mathmod_intslope)$coeff["congr", "Estimate"], size = 1.5, color = "black", linetype="solid") +
+  geom_hline(yintercept = ranef.math.pop[1], size = 1.5, color = "red", linetype="solid") +
+  geom_hline(yintercept = ranef.math.pop[2], size = 1.5, color = "red", linetype="solid") +
+    geom_jitter(width = 0, height = 0, size = 4,
+              shape = 21, colour = "navyblue", fill = "dodgerblue2", alpha = .95, stroke = 1) +
+  theme_few() +
+  theme(text = element_text(size=12))  + 
+  theme(axis.ticks.x = element_blank(), axis.text.y = element_blank()) + coord_flip() 
+math_stripplot
+#ggsave(math_stripplot, file = "Fig7_math_stripplot.pdf", height = 2, width = 8)
+
+
+
+
+####### panel plots 
+# subset of participants: 
+#29, 41, 9,  23, 40
+
+#mpranef <- ordmathmod_intslope.ranef
+mpranef <- merge(ordmathmod_intslope.ranef, ordmath, by = "id")
+mpranef$slope <- mpranef$congr.x
+mpranef$congr <- mpranef$congr.y
+
+mpranef_sub <- subset(mpranef, id == 29 | id == 41 | id == 9 |
+                                id == 23 | id == 40)
+mpranef_sub <- dplyr::select(mpranef_sub, id, congr, logrt, slope)
+mpranef_sub <- mutate(mpranef_sub,
+                              id = reorder(id, slope))
+
+foranef_sub2 <- dplyr::select(mpranef_sub, id, slope)
+
+mp_newavg <- data.frame(congr = c(-5., .5))
+mp_newavg$predlogrt <- predict(mathmod_intslope, re.form = NA, mp_newavg)
+mp_newvary <- expand.grid(congr = c(-.5, .5), id = c(29, 41, 9,  23, 40))
+mp_newvary$logrt <- predict(mathmod_intslope, mp_newvary)
+mp_newvary <- merge(mp_newvary, foranef_sub2, by = "id")
+mp_newvary <- mutate(mp_newvary, id = reorder(id, slope))
+mp_newvary$sloperound <- round(mp_newvary$slope, digits = 3)
+
+
+mp_to_string <- as_labeller(c(`29` = paste(unique(subset(mp_newvary, id == 29)$sloperound)), 
+                           `41` = paste(unique(subset(mp_newvary, id == 41)$sloperound)),
+                           `23` = paste(unique(subset(mp_newvary, id == 23)$sloperound)),
+                           `9` = paste(unique(subset(mp_newvary, id == 9)$sloperound)),
+                           `40` = paste(unique(subset(mp_newvary, id == 40)$sloperound))))
+
+
+mp_panelplot_all <- ggplot(mpranef_sub, aes(congr, logrt)) +
+  geom_jitter(height = .01, width = .03, size = 1.5,
+              shape = 21, colour = "navyblue", fill = "dodgerblue2", alpha = .95, stroke = .5) +
+  theme_few()  + geom_line(data = mp_newvary, col = "black", size = 1.3) + ylab("Reaction Time (log ms)\n") + 
+  xlab("\nMath Priming") + scale_x_continuous(breaks=seq(-.5, .5, 1), 
+                                               labels = paste0(c("Incong.", "Cong."))) + 
+  theme(text = element_text(size=12)) + ylim(5.5, 7.2)
+
+mp_panelplot_ids <- mp_panelplot_all + facet_wrap(~id, labeller = mp_to_string, nrow = 1) +
+  theme(panel.spacing = unit(2, "lines"))
+mp_panelplot_ids
+#ggsave(mp_panelplot_ids, file = "Fig8_mathpriming_panelplotbyranef_subIDs_180708.pdf", height = 4, width = 8.2)
+
+```
+
+
+## Math Priming: Bayesian Example
+```{r echo = T, results = "hide"}
+
+mathmod_bayesian <- brm(logrt ~ congr + (congr | id), data = math,
+                        cores = 4, chains = 2)
+```
+```{r}
+summary(mathmod_bayesian)
+# using default (uninformative) prior
+# note: this model may take a few minutes to run 
+# settings for chains and cores can be adjusted to help with run time
+
+```
+
+
+# Explaining Causal Heterogeneity - Reg Focus Analyses with Study 1 Dataset
+
+## Dataset 1: testing for moderation of trait valence effect by Regulatory Focus
+```{r}
+
+# creating centered promotion 
+
+promdf <- subset(rndtz, !duplicated(id))
+promdf2 <- dplyr::select(promdf, id, prom.v)
+promdf2$prom.c <- scale(promdf2$prom.v, center = T, scale = F)
+
+rndtz <- merge(rndtz, promdf2, by = "id")
+sd(rndtz$prom.c)  
+
+modindiv1 <- lmer(logrt ~ valenceE*prom.c + (1 + valenceE| id),  data=rndtz)
+summary(modindiv1)
+#confint(modindiv1)
+
+
+
+
+##### Compute Conditional Variance ######
+
+#Get interaction coefficient
+valXprom.coeff <- fixef(modindiv1)[4]
+
+#Get residual variance of valence random effect
+residvalvar <- VarCorr(modindiv1, comp="Variance")$id["valenceE", "valenceE"]
+
+# valvariance <- VarCorr(modindiv1, comp="Variance")$id["valenceE", "valenceE"] # from 171007 code
+
+
+#Calculate the implied total valence random effect variance
+#imptotalvalvar <- sd(subset(rndtz, trial==1)$prom.c)^2*valXprom.coeff^2 + valvariance # should valvariance be residvalvar?
+imptotalvalvar <- sd(subset(rndtz, trial==1)$prom.c)^2*valXprom.coeff^2 + residvalvar # should valvariance be residvalvar?
+
+
+## Variance Explained by Valence x Promotion interaction
+1-(residvalvar/imptotalvalvar)
+# 25% of variance explained by interaction effect
+
+```
+
+## Valence X Promotion Figures
+```{r}
+
+promotionranef <- ranef(modindiv1)$id
+colnames(promotionranef) <- c("intercept_prom", "slope_prom")
+
+promotionranef$id <- as.numeric(row.names(promotionranef))
+
+rndtz$idcat <- as.factor(rndtz$id)
+
+
+mean.na <- function (x) {
+  out <- mean(x, na.rm=T)
+  out
+}
+
+
+#Create dataset with one line per person with prom.c score
+promotionranef <- merge(promotionranef, promdf2, by = 'id')
+#Add prom.c scores to file with valence slopes for prom.c model
+#promotionranef$prom.c 
+
+#rndtz_merged.prom <- merge(rndtz_merged, promotionranef, by = "id")
+
+
+# Person-specific implied total valence effects for model controlling for promotion focus
+ranef.prom.pred.tot <- fixef(modindiv1)[2] + 
+                   fixef(modindiv1)[4]*promotionranef$prom.c +
+                  ranef(modindiv1)$id[,2]
+
+#Quantile for same
+ranef.prom.pred.tot.quant <- as.vector(quantile(ranef.prom.pred.tot, probs=c(.025, .975)))
+ranef.prom.pred.tot.pop1 <- c(mean(ranef.prom.pred.tot) + -1.96*sd(ranef.prom.pred.tot), 
+                             mean(ranef.prom.pred.tot) + 1.96*sd(ranef.prom.pred.tot))
+ranef.prom.pred.tot.pop <- c(mean(ranef.prom.pred.tot) + -1.96*sqrt(imptotalvalvar), 
+                             mean(ranef.prom.pred.tot) + 1.96*sqrt(imptotalvalvar))
+
+
+
+# population limits for model with promotion
+modindiv1_tidy <- tidy(summary(modindiv1)$varcor)
+ranef.valrt.prom.pop <- c(fixef(modindiv1)[2] + -1.96*subset(modindiv1_tidy, var1 == "valenceE")$sdcor, fixef(modindiv1)[2] + 1.96*subset(modindiv1_tidy, var1 == "valenceE")$sdcor)
+
+
+
+# Person-specific residual valence effects for model controlling for promotion focus
+ranef.prom.pred.resid <- fixef(modindiv1)[2] + ranef(modindiv1)$id[,2]
+
+#Quantile for same
+ranef.prom.pred.resid.quant <- as.vector(quantile(ranef.prom.pred.resid, probs=c(.025, .975)))
+
+
+### ggplot strip plot
+###### New figure #####
+promotionranef_noprom <- data.frame(id = row.names(ranef(modindiv1)$id), rt = (ranef.prom.pred.tot)) 
+promotionranef_noprom$type <- "Predictions Removing Promotion Focus"
+
+
+promotionranef_prom <- data.frame(id = row.names(ranef(modindiv1)$id), rt = (fixef(modindiv1)[2] + ranef(modindiv1)$id[,2])) 
+promotionranef_prom$type <- "Predictions with Promotion Focus"
+
+
+promotion_stripplot <- ggplot(promotionranef_prom, aes(x=type, y=rt)) + 
+  theme(legend.position="none") +
+  xlab(" ") + ylab(" ") + ggtitle("Random Effects Predicted by Promotion Model\n(Residual Heterogeneity)")+
+  ylim(-.45, .15) +
+  geom_hline(yintercept = ranef.prom.pred.resid.quant[1], size = 1.5, color = "dodgerblue2", linetype="dashed") +
+  geom_hline(yintercept = ranef.prom.pred.resid.quant[2], size = 1.5, color = "dodgerblue2", linetype="dashed") +
+    geom_hline(yintercept = ranef.valrt.prom.pop[1], size = 1.5, color = "red", linetype="solid") +
+  geom_hline(yintercept = ranef.valrt.prom.pop[2], size = 1.5, color = "red", linetype="solid") +
+
+  geom_hline(yintercept = fixef(modindiv1)[2], size = 1.5, color = "black", linetype="solid") +
+    geom_jitter(width = 0.01, height = 0, size = 4,
+              shape = 21, colour = "navyblue", fill = "dodgerblue2", alpha = .95, stroke = 1) +
+  theme_few() +
+  theme(text = element_text(size=10))  + 
+  theme(axis.ticks.x = element_blank(), axis.text.y = element_blank()) + coord_flip() +
+    theme(plot.title = element_text(hjust = 0.5))
+promotion_stripplot
+
+nopromotion_stripplot <- ggplot(promotionranef_noprom, aes(x=type, y=rt)) + 
+  theme(legend.position="none") +
+  xlab(" ") + ylab("Trait Valence Effect (logRT units)") + 
+  ggtitle("Implied Random Effects Predicted without Promotion\n(Implied Total Heterogeneity)")+
+  ylim(-.45, .15) +
+  geom_hline(yintercept = ranef.prom.pred.tot.quant[1], size = 1.5, color = "dodgerblue2", linetype="dashed") +
+  geom_hline(yintercept = ranef.prom.pred.tot.quant[2], size = 1.5, color = "dodgerblue2", linetype="dashed") +
+  
+    geom_hline(yintercept = ranef.prom.pred.tot.pop[1], size = 1.5, color = "red", linetype="solid") +
+  geom_hline(yintercept = ranef.prom.pred.tot.pop[2], size = 1.5, color = "red", linetype="solid") +
+  
+  geom_hline(yintercept = mean(ranef.prom.pred.tot), size = 1.5, color = "black", linetype="solid") +
+    geom_jitter(width = 0.01, height = 0, size = 4,
+              shape = 21, colour = "navyblue", fill = "dodgerblue2", alpha = .95, stroke = 1) +
+  theme_few() +
+  theme(text = element_text(size=10))  +
+  theme(axis.ticks.x = element_blank(), axis.text.y = element_blank()) + coord_flip() +
+    theme(plot.title = element_text(hjust = 0.5))
+nopromotion_stripplot
+
+
+promotion_stripplots <- grid.arrange(promotion_stripplot, nopromotion_stripplot, nrow = 2)
+#ggsave(promotion_stripplots, file = "Fig9_promotion_stripplots_180711.pdf", width = 8, height = 4)
+
+```
+
+# Valence by Promotion Figure - Scatterplot with Distribution 
+```{r}
+
+##### scatterplot ######
+mu_p <- c(mean(rndtz$prom.c), summary(modindiv1)$coeff["valenceE", "Estimate"])
+mu_p <- as.vector(mu_p)
+
+
+# implied cov 
+fixef(modindiv1)[4]*var(rndtz$prom.c)
+
+sigma_pop_p <- matrix(c(var(rndtz$prom.c),
+                       fixef(modindiv1)[4]*var(rndtz$prom.c),
+                       fixef(modindiv1)[4]*var(rndtz$prom.c), 
+                       imptotalvalvar), nrow=2, byrow=TRUE)
+
+
+
+
+ell_prom_pop <-as.data.frame(ellipse(sigma_pop_p, centre = mu_p, level=0.95, npoints=1000))
+colnames(ell_prom_pop) <- c("a", "b")
+
+p <- ggplot(promotionranef, aes(prom.c, ranef.prom.pred.tot)) + 
+   geom_hline(yintercept = 0, size = .3, color = "gray", linetype="solid") + 
+  geom_vline(xintercept = 0, size = .3, color = "gray", linetype="solid") +
+  geom_hline(yintercept = mean(ranef.prom.pred.tot), size = .5, color = "black", linetype="solid") + stat_smooth(method = 'lm', se =F, color = "black", size = .5) + geom_jitter(height = 0, width = 0, size = 4,
+              shape = 21, colour = "navyblue", fill = "dodgerblue2", alpha = .95, stroke = 1) + 
+  theme_few() + xlab("Promotion Focus (mean centered)") +
+  ylab("Implied Total Heterogeneity")+
+    geom_path(data=ell_prom_pop, aes(x=a, y=b), size=1, linetype="solid", color = "red") + 
+  ylim(-.6, .4)
+  #geom_hline(yintercept = ranef.prom.pred.tot.pop[1], size = 1.5, color = "red", linetype="solid") +
+  #geom_hline(yintercept = ranef.prom.pred.tot.pop[2], size = 1.5, color = "red", linetype="solid")
+
+#ggsave(p, file = "p.pdf", height = 4, width = 6)
+
+#ggsave(ggExtra::ggMarginal(p, type = "density"), file = "scatterhist.pdf", height = 12, width = 12)
+
+
+
+##### distribution with rug #####
+mean_pmodel <- fixef(modindiv1)[2] # implied fixed effect w/promotion 
+sd_pmodel <- subset(modindiv1_tidy, var1 == "valenceE")$sdcor # pop value
+
+dendfprom <- data.frame(
+x =  seq(-4,4,length=1000)*sd_pmodel + mean_pmodel, ub=0, lb = -1)
+
+dendfprom$hx = dnorm(dendfprom$x, mean_pmodel, sd_pmodel)
+
+dendfprom$i <- dendfprom$x >= dendfprom$lb & dendfprom$x <= dendfprom$ub
+x1 <- c(dendfprom$lb,dendfprom$x[dendfprom$i],dendfprom$ub)
+x2 <- c(0,dendfprom$hx[dendfprom$i],0)
+
+densplotprom <- ggplot(dendfprom, aes(x=x)) + 
+  geom_path(data = dendfprom, aes(x=x, y=hx), alpha = 1, color = "firebrick3", size = 1) + theme_few()   +
+    geom_vline(xintercept = 0, size = .3, color = "gray", linetype="solid")
+
+  
+
+densplotprom_dat <- ggplot_build(densplotprom)$data[[1]]
+
+
+ranef.prom.pred.tot.df <- as.data.frame(ranef.prom.pred.tot)
+
+densplotprom2 <- densplotprom + 
+  geom_area(data = subset(densplotprom_dat, x <= 0), aes(x=x, y=y), fill="red", alpha = .4, color = 'red') +
+  theme_few() + xlab("Trait Valence Effect (logRT units)") + ylab("") + 
+   geom_path(data = dendfprom, aes(x=x, y=hx), alpha = 1, color = "red", size = 1) +
+       geom_vline(xintercept = mean(ranef.prom.pred.tot), size = .5, color = "black", linetype="solid") + 
+
+ # ggtitle(denstitle ) +
+  geom_rug(data = ranef.prom.pred.tot.df, aes(ranef.prom.pred.tot), color = "dodgerblue2", size = 1)+
+    theme(text = element_text(size=12))  + 
+    theme(plot.title = element_text(hjust = 0.5)) +
+  
+    geom_vline(xintercept = ranef.prom.pred.tot.pop[1], size = 1.5, color = "red", linetype="solid") +
+  geom_vline(xintercept = ranef.prom.pred.tot.pop[2], size = 1.5, color = "red", linetype="solid")+
+
+  theme(
+  axis.text.y = element_blank(),
+  axis.ticks = element_blank()) + 
+  theme(axis.title.y=element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks.y=element_blank()) +
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank()) + xlim(-.6, .4) + coord_flip() 
+#ggsave(densplotprom2, file = "densplotprom2.pdf", height = 5, width = 8)
+# add limit lines for distribution
+
+
+
+
+
+library(ggpubr)
+
+promotion_scatter  <- ggarrange(p, densplotprom2, 
+          ncol = 2, nrow = 1,  align = "hv", 
+          widths = c(1, .5), heights = c(1, 1),
+          common.legend = TRUE)
+promotion_scatter
+
+#ggsave(promotion_scatter, file = "Fig10_promotion_scatter.pdf", height = 4, width = 8)
+
+
+
+```
+
+
+## Explaining Heterogeneity: Bayesian Example
+```{r echo = T, results = "hide"}
+
+modindiv1_bayesian <- brm(logrt ~ valenceE*prom.c + (1 + valenceE| id), data=rndtz, cores = 4, chains = 2)
+```
+```{r}
+summary(modindiv1_bayesian)
+# using default (uninformative) prior
+# note: this model may take a few minutes to run 
+# settings for chains and cores can be adjusted to help with run time
+
+```
+
+
+
+# Temporal Stability in Heterogeneity - Reg Focus Analyses with Scholer, Ozaki, & Higgins (JESP, 2014) Dataset
+```{r}
+
+
+##### ***Dataset available from the authors upon request *** #####
+RTexptboth <- read.csv("heterogeneity_dataset4_temporalstability.csv")
+
+length(unique(RTexptboth$subj))
+
+sort(table(subset(RTexptboth, t1 == 1)$subj))
+mean(table(subset(RTexptboth, t1 == 1)$subj))
+
+sort(table(subset(RTexptboth, t2 == 1)$subj))
+mean(table(subset(RTexptboth, t2 == 1)$subj))
+
+# With effect-coded valence as -.5, +.5
+
+logRTboth <- lmer(rt_log ~ -1 + RTexptboth$t1 + RTexptboth$t2 
+                  + RTexptboth$t1:RTexptboth$valenceE
+                  + RTexptboth$t2:RTexptboth$valenceE +
+                    (-1 + RTexptboth$t1 + RTexptboth$t2 
+                     + RTexptboth$t1:RTexptboth$valenceE
+                     + RTexptboth$t2:RTexptboth$valenceE | subj), 
+                  data=RTexptboth)
+summary(logRTboth)
+# confint(logRTboth, oldNames = FALSE) # issues with running this command. 
+
+
+### Fixed Effect CIs
+#confint(logRTboth, "RTexptboth$t1")
+#confint(logRTboth, "RTexptboth$t2")
+
+#confint(logRTboth, "RTexptboth$t1:RTexptboth$valenceE")
+#confint(logRTboth, "RTexptboth$t2:RTexptboth$valenceE")
+
+
+### Random Effect CIs
+#confint(logRTboth, ".sig01") # CI for intercept sd for T1
+
+#confint(logRTboth, ".sig02") # cov of intercepts
+# .sig02 0.5752613 0.9351608
+
+#confint(logRTboth, ".sig03") 
+# .sig03 -0.03766168      1
+
+#confint(logRTboth, ".sig04")
+# .sig04    -1 -0.1239896
+
+#confint(logRTboth, ".sig05")
+#.sig05 0.1699813 0.2802346
+
+#confint(logRTboth, ".sig06")
+#.sig06    -1 0.429193
+
+#confint(logRTboth, ".sig07")
+#.sig07    -1      1
+
+#Calculate Population Heterogeneity for Intercept T1
+round(7.05409 + 1.96*0.1948, digits = 2)
+round(7.05409 - 1.96*0.1948, digits = 2)
+
+#Calculate Population Heterogeneity for slope T1
+round(-0.13944 + 1.96*0.1864, digits = 2)
+round(-0.13944 - 1.96*0.1864, digits = 2)
+
+#Calculate Population Heterogeneity for Intercept T2
+round(7.00447 + 1.96*0.2154, digits = 2)
+round(7.00447 - 1.96*0.2154, digits = 2)
+
+#Calculate Population Heterogeneity for slope T2
+round(-0.19152 + 1.96*0.2709, digits = 2)
+round(-0.19152 - 1.96*0.2709, digits = 2)
+
+
+
+
+
+
+
+ranefboth <- ranef(logRTboth)$subj
+ranefboth$t1_valenceE <-  ranefboth$`RTexptboth$t1:RTexptboth$valenceE` + -0.13944   
+ranefboth$t2_valenceE <-  ranefboth$`RTexptboth$t2:RTexptboth$valenceE` + -0.19152
+cor(ranef(logRTboth)$subj)
+
+var(ranefboth$t1_valenceE)
+var(ranefboth$t2_valenceE)
+cov(ranefboth$t1_valenceE, ranefboth$t2_valenceE)
+
+
+
+
+```
+
+## Ellipse 
+```{r}
+
+
+cortocov <- function (r, var1, var2) {
+  cov=r*((var1*var2)^0.5)
+  return(cov)
+}
+
+
+
+
+### with effect coding
+cortocov(0.95, VarCorr(logRTboth, comp="Variance")$subj["RTexptboth$t1:RTexptboth$valenceE", "RTexptboth$t1:RTexptboth$valenceE"], VarCorr(logRTboth, comp="Variance")$subj["RTexptboth$t2:RTexptboth$valenceE", "RTexptboth$t2:RTexptboth$valenceE"]) # 0.04797852
+
+
+
+muII <- c(summary(logRTboth)$coeff["RTexptboth$t1:RTexptboth$valenceE", "Estimate"], summary(logRTboth)$coeff["RTexptboth$t2:RTexptboth$valenceE", "Estimate"])
+
+# bet. pop random effects - red
+sigmaII_pop <- matrix(c(VarCorr(logRTboth, comp="Variance")$subj["RTexptboth$t1:RTexptboth$valenceE", "RTexptboth$t1:RTexptboth$valenceE"],
+                     0.04797852, 0.04797852, VarCorr(logRTboth, comp="Variance")$subj["RTexptboth$t2:RTexptboth$valenceE", "RTexptboth$t2:RTexptboth$valenceE"]), nrow=2, byrow=TRUE)
+
+sigmaII_samp <- matrix(c(var(ranefboth$t1_valenceE),
+                    cov(ranefboth$t1_valenceE, ranefboth$t2_valenceE),
+                    cov(ranefboth$t1_valenceE, ranefboth$t2_valenceE), var(ranefboth$t2_valenceE)), nrow=2, byrow=TRUE)
+
+
+
+ell_pop <-as.data.frame(ellipse(sigmaII_pop, centre = muII, level=0.95, npoints=1000))
+ell_samp <-as.data.frame(ellipse(sigmaII_samp, centre = muII, level=0.95, npoints=1000))
+
+temporal_plot <- ggplot(ranefboth, aes(t1_valenceE, t2_valenceE)) + 
+  geom_hline(yintercept = 0, size = .3, color = "gray", linetype="solid") + 
+  geom_vline(xintercept = 0, size = .3, color = "gray", linetype="solid") + 
+  geom_point(size = 5,
+             shape = 21, colour = "navyblue", fill = "dodgerblue2", alpha = .95, stroke = 1) + 
+  xlab("Trait Valence Effect: Time 1") + ylab("Trait Valence Effect: Time 2") +
+  #stat_ellipse(color = "red", lty = "solid", size = 1) + 
+  #geom_path(data=ell_samp, aes(x=x, y=y), size=1, linetype="longdash", color = "dodgerblue2")+
+  geom_path(data=ell_pop, aes(x=x, y=y), colour='red', size = 1)+
+  theme(text = element_text(size=12)) + theme_few() 
+temporal_plot
+# ggsave(temporal_plot, file = "Fig11_temporal_plot.pdf", height = 4, width = 4)
+
+                     
+     
+
+```
+
+
+## Temporal Stability: Bayesian Example
+``` {r echo = T, results = "hide"}
+logRTboth_bayesian <- brm(rt_log ~ -1 + t1 + t2 
+                  + t1:valenceE
+                  + t2:valenceE +
+                    (-1 + t1 + t2 
+                     + t1:valenceE
+                     + t2:valenceE | subj), 
+                  data=RTexptboth, cores = 4, chains = 2)
+```
+```{r}
+summary(logRTboth_bayesian)
+# using default (uninformative) prior
+# note: this model may take a few minutes to run 
+# settings for chains and cores can be adjusted to help with run time
+
+
+```
